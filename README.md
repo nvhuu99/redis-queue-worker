@@ -30,6 +30,8 @@ Co\run(function () {
         $queue->push(Job::fromString('image:rotate'));
         $queue->push(Job::fromString('file:clean'));
         // ... Add more jobs as needed
+
+        $queue->close(true);
     });
 });
 ```
