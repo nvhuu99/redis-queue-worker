@@ -60,6 +60,7 @@ Inside the container, navigate to the project directory and run the test:
 
 ```bash
 cd /var/redis-queue-worker
+composer install
 php -f index.php
 ```
 
