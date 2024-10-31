@@ -1,0 +1,25 @@
+version: '3'
+
+services:
+    redis:
+        image: redis/redis-stack:latest
+        container_name: redis
+        ports:
+            - "6379:6379"
+            - "8001:8001"
+        networks:
+            - jenkins
+
+    queue_worker:
+        container_name: queue_worker
+        build:
+            context: .
+            dockerfile: ./dockerfile
+        volumes:
+          - "./:/var/redis-queue-worker/"
+        networks:
+            - jenkins
+    
+networks:
+  jenkins:
+    driver: bridge

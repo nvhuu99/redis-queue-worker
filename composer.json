@@ -1,0 +1,11 @@
+{
+    "name": "huu.nv/learn-redis",
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    },
+    "require": {
+        "predis/predis": "^2.2"
+    }
+}
