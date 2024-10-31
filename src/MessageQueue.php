@@ -2,119 +2,157 @@
 namespace App;
 
 use Predis\Client;
-use App\Constants\Messages;
-use App\Subscriber;
+use Exception;
 
-class MessageQueue implements Subscriber
+class MessageQueue
 {
-    use SubscriberTrait;
+    private string $id = "";
 
-    private string $id;
+    private array $workers = [];
 
-    private array $workers;
+    private int $maxProcess = 3;
 
-    private Client $redis;
+    private int $numProcess = 0;
 
-    public function __construct(Client $redis) 
+    private bool $looping = false;
+
+    private string $connection = "";
+
+    public function __construct() 
     {
         $this->id = 'queue_' . time();
-        $this->redis = $redis;
     }
 
     public function channel(): string 
     {
-        return $this->id;
+        return "queue:channel:{$this->id}";
     }
 
-    public function open(...$workers): void
+    public function addWorker(string $label, QueueWorker $worker): self
     {
-        $redis = $this->redis;
+        $this->workers[$label] = $worker;
+
+        return $this;
+    }
+
+    public function maxProcess(int $max = 3): self
+    {
+        $this->maxProcess = $max;
+
+        return $this;
+    }
+
+    public function redis(string $connection): self
+    {
+        $this->connection = $connection;
         
-        // Reset worker lists
-        $channels = array_map(fn ($w) => $w->channel(), $workers);
-        $redis->sinterstore($this->key('workers:working'), '[]');
-        $redis->sadd($this->key('workers'), $channels);
+        return $this;
+    }
 
-        // Register workers
-        $this->workers = $workers;
+    /**
+     * Start listening the job queue
+     */
+    public function open(): void
+    {
+        go(function() {
+            $redis = $this->createRedis();
+            $redis->sadd('queues', $this->key());
 
-        array_walk($workers, fn($w) => $w->workFor($this));
+            $this->looping = true;
 
-        $this->subscribe($this->channel(), function ($json) use ($redis) {
-            $payload = json_decode($json);
-            switch ($payload['message']) {
-                case Messages::Available:
-                    $redis->srem($this->key('workers:working'), $payload['channel']);
-                    $this->onAvailable();
-                    break;
-                case Messages::Working: 
-                    $redis->sadd($this->key('workers:working'), $payload['channel']);
-                    break;
+            while ($this->looping) {
+                $jobCount = $redis->llen($this->key('jobs'));
+                if (($jobCount > 0) && ($this->numProcess < $this->maxProcess)) {
+                    $job = $redis->lpop($this->key('jobs'));
+                    $this->handle(Job::fromString($job));
+                }
+                else {
+                    usleep(5);
+                }
             }
+
+            $redis->srem('queues', $this->id);
         });
     }
 
-    public function close(): void
+    /**
+     * Stop listening for the job queue
+     * 
+     * @param bool $force should close the queue when it's not empty
+     */
+    public function close(bool $force = false): void
     {
-        foreach ($this->workers as $worker) {
-            // $worker->stop();
+        go(function() use ($force) {
+            $redis = $this->createRedis();
+    
+            if ($force == false) {
+                while ($redis->llen($this->key('jobs')) > 0) {
+                    usleep(5);
+                }
+            }
+    
+            $this->looping = false;
+        });
+    }
+
+    /**
+     * Push new job to the queue
+     */
+    public function push(Job $job): void
+    {
+        static $redis;
+        
+        if (is_null($redis)) {
+            $redis = $this->createRedis();
         }
 
-        $this->unSubscribe($this->channel());
+        $redis->lpush($this->key('jobs'), $job->toString());
     }
 
-    public function push(string $command, array $params = []): void
+    /**
+     * Get Redis key for this queue
+     */
+    private function key(string $keyname = null): string 
     {
-        $job = json_encode(compact('command', 'params'));
-
-        $this->redis->lpush($this->key('jobs'), $job);
-
-        $this->notify();
+        $prefix = "queue:{$this->id}";
+        if (! is_null($keyname)) {
+            return "{$prefix}:{$keyname}";
+        }
+        return $prefix;
     }
 
-    private function key(string $keyname): string 
+    /**
+     * Create a Redis client
+     */
+    private function createRedis(): Client
     {
-        return "queue:{$this->id}:{$keyname}";
-    }
-
-    private function notify(): void
-    {
-        $worker = $this->available();
-
-        if (! is_null($worker)) {
-            $this->publish($worker, (string) Messages::HasNewJob);
+        try {
+            return new Client($this->connection);
+        }
+        catch(\Exception $e) {
+            throw new Exception("Cannot connect to Redis with connection: $this->connection");
         }
     }
 
-    private function available(): string
+    /**
+     * Create a new process and call a worker to handle the job
+     */
+    private function handle(Job $job): void
     {
-        $freeWorkers = $this->redis->sdiff(
-            $this->key('workers'),
-            $this->key('workers:working')
-        );
+        go(function() use ($job) {
+            $this->numProcess++;
 
-        return array_pop($freeWorkers); 
+            $this->worker($job->label)->handle($job->command);
+
+            $this->numProcess--;
+        });
     }
 
-    private function hasJob(): bool
-    { 
-        $len = $this->redis->llen($this->key('jobs'));
-        return $len > 0; 
-    }
-
-    public function nextJob(): array | null
+    /**
+     * Get a worker matched the label
+     */
+    private function worker(string $label): QueueWorker | null
     {
-        $json = $this->redis->lpop($this->key('jobs'));
-        if ($json) {
-            $job = json_decode($json, true);
-            return $job;
-        }
-    }
-
-    private function onAvailable()
-    {        
-        if ($this->hasJob()) {
-            $this->notify();
-        }
+        return $this->workers[$label] ?? null;
     }
 }

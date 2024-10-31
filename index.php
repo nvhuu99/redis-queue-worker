@@ -2,84 +2,57 @@
 <?php
 require 'vendor/autoload.php';
 
-use Predis\Client;
-use App\ImageWorker;
+use App\Job;
 use App\MessageQueue;
 
-Co\run(function() {
+$start = microtime(true);
+echo "Running (10,000 times)..." . PHP_EOL;
 
-    $worker = new ImageWorker(new Client('tcp://redis:6379'));
-    $queue = new MessageQueue(new Client('tcp://redis:6379'));
-
-    go(function () use ($worker) {
-        $worker->start();
-        $worker->stop();
-    });
-
-    go(function () use ($queue, $worker) {
-        $queue->open($worker);
-        $queue->close();
-    });
+Co\run(function () {
+    $queue = (new MessageQueue())
+                ->redis('tcp://redis:6379')
+                ->maxProcess(3)
+                ->addWorker('image', new \App\Workers\ImageWorker())
+                ->addWorker('file', new \App\Workers\FileWorker())
+    ;
 
     go(function () use ($queue) {
-        $command = "";
-        while($command != 'exit') {
-            echo "Enter command: ";
-            $command = fgets(STDIN);
-
-            $queue->push($command);
-        }
+        $queue->open();
     });
+
+    // Benchmark test with FileWorker
+    // Test write long text 10.000 with 10 process
+    go(function () use ($queue) {
+        for ($i = 0; $i < 10000; ++$i) {
+            $queue->push(Job::fromString('file:test'));
+        }
+
+        $queue->close();
+    });
+    
+    // go(function () use ($queue) {
+    //     echo "Enter commands:" . PHP_EOL;
+    //     while(true) {
+    //         try {
+    //             echo '> ';
+                
+    //             $command = trim(fgets(STDIN));
+    
+    //             if ($command == 'exit') {
+    //                 echo "Exiting: wait for last job to finish..." . PHP_EOL;
+    //                 break;
+    //             }
+    
+    //             $queue->push(Job::fromString($command));
+    //         }
+    //         catch (\Exception $e) {
+    //             echo "Wrong command format. Please try again: " . PHP_EOL;
+    //         }
+    //     }
+
+    //     $queue->close(true);
+    // });
 });
 
-// use Predis\Client;
-// use Swoole\Coroutine;
+echo "Finished after: " . (microtime(true) - $start) . PHP_EOL;
 
-// Co\run(function () {
-//     // Create a Redis client
-//     $redis = new Client('tcp://redis:6379');
-//     $redis2 = new Client('tcp://redis:6379');
-
-//     // Start the subscriber in a separate coroutine
-//     go(function () use ($redis) {
-//         echo '1'. PHP_EOL;
-
-//         $pubsub = $redis->pubSubLoop();
-
-//         $pubsub->subscribe('my_channel');
-        
-//         foreach ($pubsub as $message) {
-//             if ($message->kind == 'subscribe') {
-//                 continue;
-//             }
-
-//             if ($message->payload == 'exit') {
-//                 $pubsub->unsubscribe();
-//                 echo 'Unsubcribed';
-//                 break;
-//             }
-
-//             echo 'Receive: '. $message->payload . PHP_EOL;
-//         }
-//         echo '1-end' . PHP_EOL;
-//     });
-
-//     // Start listening for user input to publish messages
-//     go(function () use ($redis2) {
-//         echo '2'. PHP_EOL;
-
-//         while (true) {
-//             echo "Enter message to publish (type 'exit' to quit): ". PHP_EOL;
-//             $input = trim(fgets(STDIN));
-            
-//             $redis2->publish('my_channel', $input);
-
-//             if ($input === 'exit') {
-//                 break;
-//             }
-
-//             // Publish the message to Redis
-//             echo "Published message: $input\n";
-//         }
-//     });
-// });
