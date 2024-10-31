@@ -142,7 +142,7 @@ class MessageQueue
         go(function() use ($job) {
             $this->numProcess++;
 
-            $this->worker($job->label)->handle($job->command);
+            $this->worker($job->label)?->handle($job->command);
 
             $this->numProcess--;
         });
