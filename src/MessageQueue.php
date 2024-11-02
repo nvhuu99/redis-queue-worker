@@ -123,15 +123,24 @@ class MessageQueue
 
     /**
      * Create a Redis client
+     * 
+     * @param int $retry The number of intervals of re-connecting when Redis server is down (5 micro-seconds each).
      */
-    private function createRedis(): Client
+    private function createRedis(int $retry = 10): Client
     {
-        try {
-            return new Client($this->connection);
+        $redis = null;
+        
+        while (is_null($redis) && ($retry > 0)) {
+            try {
+                $redis = new Client($this->connection);
+                return $redis;
+            }
+            catch(\Exception $e) {
+                $retry--;
+            }
         }
-        catch(\Exception $e) {
-            throw new Exception("Cannot connect to Redis with connection: $this->connection");
-        }
+
+        throw new Exception("Cannot connect to Redis using connection string: $this->connection");
     }
 
     /**
